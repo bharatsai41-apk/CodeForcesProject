@@ -1,0 +1,12 @@
+**/node_modules
+**/dist
+**/bin
+**/obj
+**/.git
+**/.vscode
+**/.idea
+**/*.md
+!DEPLOY.md
+**/npm-debug.log*
+**/.env
+**/.env.*

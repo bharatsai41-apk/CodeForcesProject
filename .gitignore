@@ -1,0 +1,13 @@
+**/bin/
+**/obj/
+**/node_modules/
+**/dist/
+**/publish-test/
+**/.vs/
+**/.idea/
+**/.vscode/
+*.user
+*.suo
+.env
+.env.*
+!.env.example
