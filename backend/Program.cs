@@ -17,7 +17,9 @@ builder.Services.AddDistributedMemoryCache();
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
-    // you can also set KnownNetworks/KnownProxies if needed for additional safety
+    // Clear restrictions so Render's proxy (unknown IP) is trusted
+    options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
 });
 
 builder.Services.AddCors(options =>
@@ -37,9 +39,9 @@ builder.Services.AddRateLimiter(options =>
     options.AddPolicy("IsSafePolicy", httpContext =>
             RateLimitPartition.GetFixedWindowLimiter(
                 partitionKey: (
-                    // Prefer X-Forwarded-For (first entry) if present, otherwise fall back to RemoteIpAddress
-                    httpContext.Request.Headers["X-Forwarded-For"].ToString().Split(',').FirstOrDefault()?.Trim()
-                    ?? httpContext.Connection.RemoteIpAddress?.ToString()
+                    // Use RemoteIpAddress which is correctly set by UseForwardedHeaders middleware
+                    // Do NOT read X-Forwarded-For directly — clients can spoof it to bypass rate limiting
+                    httpContext.Connection.RemoteIpAddress?.ToString()
                     ?? "global"
                 ),
                 factory: partition => new FixedWindowRateLimiterOptions
@@ -51,10 +53,11 @@ builder.Services.AddRateLimiter(options =>
 });
 
 var app = builder.Build();
-app.UseCors("AllowFrontend");
 
-// Process forwarded headers before the rate limiter so RemoteIpAddress is populated correctly
+// Process forwarded headers FIRST so RemoteIpAddress is populated correctly for rate limiting
 app.UseForwardedHeaders();
+
+app.UseCors("AllowFrontend");
 
 app.UseRateLimiter();
 
