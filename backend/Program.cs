@@ -1,12 +1,20 @@
 using System.ComponentModel.DataAnnotations;
 using System.Net.Http.Json;
 using System.Threading.RateLimiting;
-using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Caching.Distributed;
+using StackExchange.Redis;
 using Scalar.AspNetCore;
 using System.Text.Json;
+
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddOpenApi();
-builder.Services.AddMemoryCache();
+
+// Configure Redis distributed cache
+var redisConnection = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = redisConnection;
+});
 
 builder.Services.AddCors(options =>
 {
@@ -17,6 +25,7 @@ builder.Services.AddCors(options =>
               .AllowAnyHeader();  // Allows custom headers
     });
 });
+
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -34,6 +43,7 @@ builder.Services.AddRateLimiter(options =>
 
 var app = builder.Build();
 app.UseCors("AllowFrontend");
+app.UseRateLimiter();
 
 if (!app.Environment.IsDevelopment())
 {
@@ -50,29 +60,35 @@ if (app.Environment.IsDevelopment())
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 
-app.MapPost("/user-profile", async (InputDto input, IMemoryCache cache, HttpContext context) =>
+app.MapPost("/user-profile", async (InputDto input, IDistributedCache cache, HttpContext context) =>
     {
-        //cache layer
+        // Distributed cache layer with Redis
         string CleanedName = input.UserName.Trim().ToLower();
         string cachekey = $"codeforces:user:{CleanedName}";
-        if (cache.TryGetValue(cachekey, out var cachedData))
+        
+        var cachedData = await cache.GetStringAsync(cachekey);
+        if (cachedData != null)
         {
-            return Results.Ok(cachedData);
+            return Results.Ok(JsonSerializer.Deserialize<object>(cachedData));
         }
 
         var inforesponse = await client.GetAsync($"/api/user.info?handles={input.UserName}");
         if (!inforesponse.IsSuccessStatusCode)
         {
-            return Results.BadRequest("User does exist");
+            return Results.BadRequest("User does not exist");
         }
+
         var info = await inforesponse.Content.ReadFromJsonAsync<object>();
         var status = await client.GetFromJsonAsync<object>($"/api/user.status?handle={input.UserName}");
         var finalinfo = new { info, status };
-        var cacheOptions = new MemoryCacheEntryOptions().
-        SetAbsoluteExpiration(TimeSpan.FromMinutes(10));
-        cache.Set(cachekey, finalinfo, cacheOptions);
+        
+        // Set cache with 10-minute expiration
+        var cacheOptions = new DistributedCacheEntryOptions()
+            .SetAbsoluteExpiration(TimeSpan.FromMinutes(10));
+        
+        await cache.SetStringAsync(cachekey, JsonSerializer.Serialize(finalinfo), cacheOptions);
         return Results.Ok(finalinfo);
-    });
+    }).RequireRateLimiting("IsSafePolicy");
 
 if (!app.Environment.IsDevelopment())
 {
@@ -80,6 +96,7 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.Run();
+
 public record InputDto(
     [Required]
     [MaxLength(50)]
