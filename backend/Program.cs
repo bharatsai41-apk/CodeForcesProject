@@ -2,14 +2,23 @@ using System.ComponentModel.DataAnnotations;
 using System.Net.Http.Json;
 using System.Threading.RateLimiting;
 using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.AspNetCore.HttpOverrides;
 using Scalar.AspNetCore;
 using System.Text.Json;
+using System.Linq;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddOpenApi();
 
 // Configure in-memory distributed cache
 builder.Services.AddDistributedMemoryCache();
+
+// If the app is running behind a proxy (nginx, ingress, etc.), enable forwarded headers
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    // you can also set KnownNetworks/KnownProxies if needed for additional safety
+});
 
 builder.Services.AddCors(options =>
 {
@@ -27,7 +36,12 @@ builder.Services.AddRateLimiter(options =>
 
     options.AddPolicy("IsSafePolicy", httpContext =>
             RateLimitPartition.GetFixedWindowLimiter(
-                partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "global",
+                partitionKey: (
+                    // Prefer X-Forwarded-For (first entry) if present, otherwise fall back to RemoteIpAddress
+                    httpContext.Request.Headers["X-Forwarded-For"].ToString().Split(',').FirstOrDefault()?.Trim()
+                    ?? httpContext.Connection.RemoteIpAddress?.ToString()
+                    ?? "global"
+                ),
                 factory: partition => new FixedWindowRateLimiterOptions
                 {
                     PermitLimit = 3,
@@ -38,6 +52,10 @@ builder.Services.AddRateLimiter(options =>
 
 var app = builder.Build();
 app.UseCors("AllowFrontend");
+
+// Process forwarded headers before the rate limiter so RemoteIpAddress is populated correctly
+app.UseForwardedHeaders();
+
 app.UseRateLimiter();
 
 if (!app.Environment.IsDevelopment())
