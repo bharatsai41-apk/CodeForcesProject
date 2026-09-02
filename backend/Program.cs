@@ -2,19 +2,14 @@ using System.ComponentModel.DataAnnotations;
 using System.Net.Http.Json;
 using System.Threading.RateLimiting;
 using Microsoft.Extensions.Caching.Distributed;
-using StackExchange.Redis;
 using Scalar.AspNetCore;
 using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddOpenApi();
 
-// Configure Redis distributed cache
-var redisConnection = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
-builder.Services.AddStackExchangeRedisCache(options =>
-{
-    options.Configuration = redisConnection;
-});
+// Configure in-memory distributed cache
+builder.Services.AddDistributedMemoryCache();
 
 builder.Services.AddCors(options =>
 {
@@ -62,7 +57,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 
 app.MapPost("/user-profile", async (InputDto input, IDistributedCache cache, HttpContext context) =>
     {
-        // Distributed cache layer with Redis
+        // Distributed cache layer (in-memory)
         string CleanedName = input.UserName.Trim().ToLower();
         string cachekey = $"codeforces:user:{CleanedName}";
         
